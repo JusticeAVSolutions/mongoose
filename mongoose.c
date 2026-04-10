@@ -19,6 +19,24 @@
 
 #include "mongoose.h"
 
+// ITCM placement for hot-path functions (STM32H7 zero-wait-state instruction RAM)
+#ifndef MG_ITCM
+#if defined(__ARM_ARCH_7EM__) || defined(__ARM_ARCH_7M__)
+#define MG_ITCM __attribute__((section(".itcm_text")))
+#else
+#define MG_ITCM
+#endif
+#endif
+
+// DTCM placement for hot-path data (STM32H7 zero-wait-state data RAM)
+#ifndef MG_DTCM
+#if defined(__ARM_ARCH_7EM__) || defined(__ARM_ARCH_7M__)
+#define MG_DTCM __attribute__((used, section(".dtcm")))
+#else
+#define MG_DTCM
+#endif
+#endif
+
 #ifdef MG_ENABLE_LINES
 #line 1 "src/base64.c"
 #endif
@@ -482,7 +500,7 @@ struct mg_connection *mg_mdns_listen(struct mg_mgr *mgr, char *name) {
 
 
 
-void mg_call(struct mg_connection *c, int ev, void *ev_data) {
+MG_ITCM void mg_call(struct mg_connection *c, int ev, void *ev_data) {
 #if MG_ENABLE_PROFILE
   const char *names[] = {
       "EV_ERROR",    "EV_OPEN",      "EV_POLL",      "EV_RESOLVE",
@@ -4402,19 +4420,19 @@ static void mkpay(struct pkt *pkt, void *p) {
       mg_str_n((char *) p, (size_t) (&pkt->pay.buf[pkt->pay.len] - (char *) p));
 }
 
-static uint32_t csumup(uint32_t sum, const void *buf, size_t len) {
+MG_ITCM static uint32_t csumup(uint32_t sum, const void *buf, size_t len) {
   size_t i;
   const uint8_t *p = (const uint8_t *) buf;
   for (i = 0; i < len; i++) sum += i & 1 ? p[i] : ((uint32_t) p[i]) << 8;
   return sum;
 }
 
-static uint16_t csumfin(uint32_t sum) {
+MG_ITCM static uint16_t csumfin(uint32_t sum) {
   while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
   return mg_htons((uint16_t) ((uint16_t) ~sum & 0xffff));
 }
 
-static uint16_t ipcsum(const void *buf, size_t len) {
+MG_ITCM static uint16_t ipcsum(const void *buf, size_t len) {
   uint32_t sum = csumup(0, buf, len);
   return csumfin(sum);
 }
@@ -4488,7 +4506,7 @@ static void settmout(struct mg_connection *c, uint8_t type) {
   MG_VERBOSE(("%lu %d -> %llx", c->id, type, s->timer));
 }
 
-static size_t ether_output(struct mg_tcpip_if *ifp, size_t len) {
+MG_ITCM static size_t ether_output(struct mg_tcpip_if *ifp, size_t len) {
   size_t n = ifp->driver->tx(ifp->tx.buf, len, ifp);
   if (n == len) ifp->nsent++;
   return n;
@@ -4524,7 +4542,7 @@ static void onstatechange(struct mg_tcpip_if *ifp) {
   mg_tcpip_call(ifp, MG_TCPIP_EV_ST_CHG, &ifp->state);
 }
 
-static struct ip *tx_ip(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
+MG_ITCM static struct ip *tx_ip(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
                         uint8_t proto, uint32_t ip_src, uint32_t ip_dst,
                         size_t plen) {
   // ifp->tx.buf is 8-bit aligned, keep other headers as pointers, see pkt
@@ -4551,7 +4569,7 @@ static struct ip6 *tx_ip6(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
                           size_t plen);
 #endif
 
-static bool tx_udp(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
+MG_ITCM static bool tx_udp(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
                    struct mg_addr *ip_src, struct mg_addr *ip_dst,
                    const void *buf, size_t len) {
   struct ip *ip = NULL;
@@ -4671,7 +4689,7 @@ static void tx_dhcp_discover(struct mg_tcpip_if *ifp) {
   MG_DEBUG(("DHCP discover sent. Our MAC: %M", mg_print_mac, ifp->mac));
 }
 
-static struct mg_connection *getpeer(struct mg_mgr *mgr, struct pkt *pkt,
+MG_ITCM static struct mg_connection *getpeer(struct mg_mgr *mgr, struct pkt *pkt,
                                      bool lsn) {
   struct mg_connection *c = NULL;
   for (c = mgr->conns; c != NULL; c = c->next) {
@@ -5127,7 +5145,7 @@ static void onstate6change(struct mg_tcpip_if *ifp) {
 }
 #endif
 
-static bool rx_udp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
+MG_ITCM static bool rx_udp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
   struct mg_connection *c = getpeer(ifp->mgr, pkt, true);
   struct connstate *s;
   if (c == NULL) return false;  // No UDP listener on this port
@@ -5156,7 +5174,7 @@ static bool rx_udp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
   return true;
 }
 
-static size_t tx_tcp(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
+MG_ITCM static size_t tx_tcp(struct mg_tcpip_if *ifp, uint8_t *mac_dst,
                      struct mg_addr *ip_src, struct mg_addr *ip_dst,
                      uint8_t flags, uint32_t seq, uint32_t ack, const void *buf,
                      size_t len) {
@@ -5343,7 +5361,7 @@ static bool udp_send(struct mg_connection *c, const void *buf, size_t len) {
   return tx_udp(ifp, s->mac, &ips, &c->rem, buf, len);
 }
 
-long mg_io_send(struct mg_connection *c, const void *buf, size_t len) {
+MG_ITCM long mg_io_send(struct mg_connection *c, const void *buf, size_t len) {
   struct connstate *s = (struct connstate *) (c + 1);
   len = trim_len(c, len);
   if (c->is_udp) {
@@ -5366,7 +5384,7 @@ long mg_io_send(struct mg_connection *c, const void *buf, size_t len) {
   return (long) len;
 }
 
-static void handle_tls_recv(struct mg_connection *c) {
+MG_ITCM static void handle_tls_recv(struct mg_connection *c) {
   size_t avail = mg_tls_pending(c);
   size_t min = avail > MG_MAX_RECV_SIZE ? MG_MAX_RECV_SIZE : avail;
   struct mg_iobuf *io = &c->recv;
@@ -5386,7 +5404,7 @@ static void handle_tls_recv(struct mg_connection *c) {
   }
 }
 
-static void read_conn(struct mg_connection *c, struct pkt *pkt) {
+MG_ITCM static void read_conn(struct mg_connection *c, struct pkt *pkt) {
   struct connstate *s = (struct connstate *) (c + 1);
   struct mg_iobuf *io = c->is_tls ? &c->rtls : &c->recv;
   uint32_t seq = mg_ntohl(pkt->tcp->seq);
@@ -5543,7 +5561,7 @@ static void handle_opt(struct connstate *s, struct tcp *tcp, bool ip6) {
   }
 }
 
-static void rx_tcp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
+MG_ITCM static void rx_tcp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
   struct mg_connection *c = getpeer(ifp->mgr, pkt, false);
   struct connstate *s = c == NULL ? NULL : (struct connstate *) (c + 1);
   // Order is VERY important; RFC-9293 3.5.2
@@ -5616,7 +5634,7 @@ static void rx_tcp(struct mg_tcpip_if *ifp, struct pkt *pkt) {
     }  // else  silently discard
 }
 
-static void rx_ip(struct mg_tcpip_if *ifp, struct pkt *pkt) {
+MG_ITCM static void rx_ip(struct mg_tcpip_if *ifp, struct pkt *pkt) {
   uint8_t ihl;
   uint16_t frag, len;
   if (pkt->pay.len < sizeof(*pkt->ip)) return;  // Truncated
@@ -5777,7 +5795,7 @@ static void rx_ip6(struct mg_tcpip_if *ifp, struct pkt *pkt) {
 #define rx_ip6(x, y)
 #endif
 
-static void mg_tcpip_rx(struct mg_tcpip_if *ifp, void *buf, size_t len) {
+MG_ITCM static void mg_tcpip_rx(struct mg_tcpip_if *ifp, void *buf, size_t len) {
   struct pkt pkt;
   memset(&pkt, 0, sizeof(pkt));
   pkt.pay.buf = pkt.raw.buf = (char *) buf;
@@ -5872,7 +5890,7 @@ static void mg_ip6_link(struct mg_tcpip_if *ifp, bool up) {
 #define mg_ip6_link(x, y)
 #endif
 
-static void mg_tcpip_poll(struct mg_tcpip_if *ifp, uint64_t now) {
+MG_ITCM static void mg_tcpip_poll(struct mg_tcpip_if *ifp, uint64_t now) {
   struct mg_connection *c;
   bool expired_1000ms = mg_timer_expired(&ifp->timer_1000ms, 1000, now);
   ifp->now = now;
@@ -6143,7 +6161,7 @@ bool mg_open_listener(struct mg_connection *c, const char *url) {
   return true;
 }
 
-static void write_conn(struct mg_connection *c) {
+MG_ITCM static void write_conn(struct mg_connection *c) {
   long len = c->is_tls ? mg_tls_send(c, c->send.buf, c->send.len)
                        : mg_io_send(c, c->send.buf, c->send.len);
   // TODO(): mg_tls_send() may return 0 forever on steady OOM
@@ -6155,7 +6173,7 @@ static void write_conn(struct mg_connection *c) {
   }
 }
 
-static void init_closure(struct mg_connection *c) {
+MG_ITCM static void init_closure(struct mg_connection *c) {
   struct connstate *s = (struct connstate *) (c + 1);
   if (c->is_udp == false && c->is_listening == false &&
       c->is_connecting == false) {  // For TCP conns,
@@ -6165,18 +6183,18 @@ static void init_closure(struct mg_connection *c) {
   }
 }
 
-static void close_conn(struct mg_connection *c) {
+MG_ITCM static void close_conn(struct mg_connection *c) {
   struct connstate *s = (struct connstate *) (c + 1);
   mg_iobuf_free(&s->raw);  // For TLS connections, release raw data
   mg_close_conn(c);
 }
 
-static bool can_write(struct mg_connection *c) {
+MG_ITCM static bool can_write(struct mg_connection *c) {
   return c->is_connecting == 0 && c->is_resolving == 0 && c->send.len > 0 &&
          c->is_tls_hs == 0 && c->is_arplooking == 0;
 }
 
-void mg_mgr_poll(struct mg_mgr *mgr, int ms) {
+MG_ITCM void mg_mgr_poll(struct mg_mgr *mgr, int ms) {
   struct mg_connection *c, *tmp;
   uint64_t now = mg_millis();
   mg_timer_poll(&mgr->timers, now);
@@ -6225,9 +6243,9 @@ bool mg_send(struct mg_connection *c, const void *buf, size_t len) {
     len = trim_len(c, len);  // Trimming length if necessary
     res = udp_send(c, buf, len);
   } else {
-    res = (bool) mg_iobuf_add(&c->send, c->send.len, buf, len);
-    // res == 0 means an OOM condition (iobuf couldn't resize), yet this is so
-    // far recoverable, let the caller decide
+    res = len == 0 || mg_iobuf_add(&c->send, c->send.len, buf, len) > 0;
+    // returning 0 means an OOM condition (iobuf couldn't resize), yet this is
+    // so far recoverable, let the caller decide
   }
   return res;
 }
@@ -9051,7 +9069,7 @@ void mg_sha256_init(mg_sha256_ctx *ctx) {
   ctx->state[7] = 0x5be0cd19;
 }
 
-static void mg_sha256_chunk(mg_sha256_ctx *ctx) {
+MG_ITCM static void mg_sha256_chunk(mg_sha256_ctx *ctx) {
   int i, j;
   uint32_t a, b, c, d, e, f, g, h;
   uint32_t m[64];
@@ -9095,7 +9113,7 @@ static void mg_sha256_chunk(mg_sha256_ctx *ctx) {
   ctx->state[7] += h;
 }
 
-void mg_sha256_update(mg_sha256_ctx *ctx, const unsigned char *data,
+MG_ITCM void mg_sha256_update(mg_sha256_ctx *ctx, const unsigned char *data,
                       size_t len) {
   size_t i;
   for (i = 0; i < len; i++) {
@@ -9109,7 +9127,7 @@ void mg_sha256_update(mg_sha256_ctx *ctx, const unsigned char *data,
 }
 
 // TODO: make final reusable (remove side effects)
-void mg_sha256_final(unsigned char digest[32], mg_sha256_ctx *ctx) {
+MG_ITCM void mg_sha256_final(unsigned char digest[32], mg_sha256_ctx *ctx) {
   uint32_t i = ctx->len;
   if (i < 56) {
     ctx->buffer[i++] = 0x80;
@@ -9155,7 +9173,7 @@ void mg_sha256(uint8_t dst[32], uint8_t *data, size_t datasz) {
   mg_sha256_final(dst, &ctx);
 }
 
-void mg_hmac_sha256(uint8_t dst[32], uint8_t *key, size_t keysz, uint8_t *data,
+MG_ITCM void mg_hmac_sha256(uint8_t dst[32], uint8_t *key, size_t keysz, uint8_t *data,
                     size_t datasz) {
   mg_sha256_ctx ctx;
   uint8_t k[64] = {0};
@@ -9582,7 +9600,7 @@ bool mg_send(struct mg_connection *c, const void *buf, size_t len) {
     iolog(c, (char *) buf, n, false);
     return n > 0;
   } else {
-    return (bool) mg_iobuf_add(&c->send, c->send.len, buf, len);
+    return len == 0 || mg_iobuf_add(&c->send, c->send.len, buf, len) > 0;
     // returning 0 means an OOM condition (iobuf couldn't resize), yet this is
     // so far recoverable, let the caller decide
   }
@@ -10588,7 +10606,7 @@ void mg_timer_poll(struct mg_timer **head, uint64_t now_ms) {
 
 #if MG_TLS == MG_TLS_BUILTIN
 /******************************************************************************/
-#define AES_DECRYPTION 1  // whether AES decryption is supported
+#define AES_DECRYPTION 0  // GCM uses AES-CTR (encrypt only); saves ~4.3 KB DTCM
 /******************************************************************************/
 
 #define MG_ENCRYPT 1  // specify whether we're encrypting
@@ -10701,7 +10719,7 @@ static int gcm_start(
  *  have a partial block length of < 128 bits.)
  *
  ******************************************************************************/
-static int gcm_update(gcm_context *ctx,  // pointer to user-provided GCM context
+static MG_ITCM int gcm_update(gcm_context *ctx,  // pointer to user-provided GCM context
                       size_t length,     // length, in bytes, of data to process
                       const unsigned char *input,  // pointer to source data
                       unsigned char *output);      // pointer to destination data
@@ -10768,21 +10786,21 @@ static int aes_tables_inited = 0;  // run-once flag for performing key
  *  decryption is typically disabled by setting AES_DECRYPTION to 0 in aes.h.
  */
 // We always need our forward tables
-static unsigned char FSb[256];     // Forward substitution box (FSb)
-static uint32_t FT0[256];  // Forward key schedule assembly tables
-static uint32_t FT1[256];
-static uint32_t FT2[256];
-static uint32_t FT3[256];
+MG_DTCM static unsigned char FSb[256];     // Forward substitution box (FSb)
+MG_DTCM static uint32_t FT0[256];  // Forward key schedule assembly tables
+MG_DTCM static uint32_t FT1[256];
+MG_DTCM static uint32_t FT2[256];
+MG_DTCM static uint32_t FT3[256];
 
 #if AES_DECRYPTION         // We ONLY need reverse for decryption
-static unsigned char RSb[256];     // Reverse substitution box (RSb)
-static uint32_t RT0[256];  // Reverse key schedule assembly tables
-static uint32_t RT1[256];
-static uint32_t RT2[256];
-static uint32_t RT3[256];
+MG_DTCM static unsigned char RSb[256];     // Reverse substitution box (RSb)
+MG_DTCM static uint32_t RT0[256];  // Reverse key schedule assembly tables
+MG_DTCM static uint32_t RT1[256];
+MG_DTCM static uint32_t RT2[256];
+MG_DTCM static uint32_t RT3[256];
 #endif /* AES_DECRYPTION */
 
-static uint32_t RCON[10];  // AES round constants
+MG_DTCM static uint32_t RCON[10];  // AES round constants
 
 /*
  * Platform Endianness Neutralizing Load and Store Macro definitions
@@ -11099,7 +11117,7 @@ static int aes_setkey(aes_context *ctx,  // AES context provided by our caller
  *  and all keying information appropriate for the task.
  *
  ******************************************************************************/
-static int aes_cipher(aes_context *ctx, const unsigned char input[16],
+MG_ITCM static int aes_cipher(aes_context *ctx, const unsigned char input[16],
                       unsigned char output[16]) {
   int i;
   uint32_t *RK, X0, X1, X2, X3, Y0, Y1, Y2, Y3;  // general purpose locals
@@ -11309,7 +11327,7 @@ int mg_gcm_initialize(void) {
  *  'x' and 'output' are seen as elements of GCM's GF(2^128) Galois field.
  *
  ******************************************************************************/
-static void gcm_mult(gcm_context *ctx,   // pointer to established context
+MG_ITCM static void gcm_mult(gcm_context *ctx,   // pointer to established context
                      const unsigned char x[16],  // pointer to 128-bit input vector
                      unsigned char output[16])   // pointer to 128-bit output vector
 {
@@ -11428,7 +11446,7 @@ static int gcm_setkey(
  *  mode, and preprocesses the initialization vector and additional AEAD data.
  *
  ******************************************************************************/
-int gcm_start(gcm_context *ctx,  // pointer to user-provided GCM context
+MG_ITCM int gcm_start(gcm_context *ctx,  // pointer to user-provided GCM context
               int mode,          // GCM_ENCRYPT or GCM_DECRYPT
               const unsigned char *iv,   // pointer to initialization vector
               size_t iv_len,     // IV length in bytes (should == 12)
@@ -11496,7 +11514,7 @@ int gcm_start(gcm_context *ctx,  // pointer to user-provided GCM context
  *  have a partial block length of < 128 bits.)
  *
  ******************************************************************************/
-int gcm_update(gcm_context *ctx,    // pointer to user-provided GCM context
+MG_ITCM int gcm_update(gcm_context *ctx,    // pointer to user-provided GCM context
                size_t length,       // length, in bytes, of data to process
                const unsigned char *input,  // pointer to source data
                unsigned char *output)       // pointer to destination data
@@ -11560,7 +11578,7 @@ int gcm_update(gcm_context *ctx,    // pointer to user-provided GCM context
  *  It performs the final GHASH to produce the resulting authentication TAG.
  *
  ******************************************************************************/
-int gcm_finish(gcm_context *ctx,  // pointer to user-provided GCM context
+MG_ITCM int gcm_finish(gcm_context *ctx,  // pointer to user-provided GCM context
                unsigned char *tag,        // pointer to buffer which receives the tag
                size_t tag_len)    // length, in bytes, of the tag-receiving buf
 {
@@ -12092,7 +12110,7 @@ static void mg_tls_generate_application_keys(struct mg_connection *c) {
 }
 
 // AES GCM encryption of the message + put encoded data into the write buffer
-static bool mg_tls_encrypt(struct mg_connection *c, const uint8_t *msg,
+MG_ITCM static bool mg_tls_encrypt(struct mg_connection *c, const uint8_t *msg,
                            size_t msgsz, uint8_t msgtype) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   struct mg_iobuf *wio = &tls->send;
@@ -12157,7 +12175,7 @@ static bool mg_tls_encrypt(struct mg_connection *c, const uint8_t *msg,
 }
 
 // read an encrypted record, decrypt it in place
-static int mg_tls_recv_record(struct mg_connection *c) {
+MG_ITCM static int mg_tls_recv_record(struct mg_connection *c) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   struct mg_iobuf *rio = &c->rtls;
   uint16_t msgsz;
@@ -13466,7 +13484,7 @@ void mg_tls_free(struct mg_connection *c) {
   c->tls = NULL;
 }
 
-long mg_tls_send(struct mg_connection *c, const void *buf, size_t len) {
+MG_ITCM long mg_tls_send(struct mg_connection *c, const void *buf, size_t len) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   long n = MG_IO_WAIT;
   bool was_throttled = c->is_tls_throttled;  // see #3074
@@ -13489,7 +13507,7 @@ long mg_tls_send(struct mg_connection *c, const void *buf, size_t len) {
   return (long) len;  // return len even when throttled, already encripted that
 }
 
-long mg_tls_recv(struct mg_connection *c, void *buf, size_t len) {
+MG_ITCM long mg_tls_recv(struct mg_connection *c, void *buf, size_t len) {
   int r = 0;
   struct tls_data *tls = (struct tls_data *) c->tls;
   unsigned char *recv_buf;
@@ -13517,12 +13535,12 @@ long mg_tls_recv(struct mg_connection *c, void *buf, size_t len) {
   return (long) minlen;
 }
 
-size_t mg_tls_pending(struct mg_connection *c) {
+MG_ITCM size_t mg_tls_pending(struct mg_connection *c) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   return tls != NULL ? tls->recv_len : 0;
 }
 
-void mg_tls_flush(struct mg_connection *c) {
+MG_ITCM void mg_tls_flush(struct mg_connection *c) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   long n;
   while (tls->send.len > 0 &&
