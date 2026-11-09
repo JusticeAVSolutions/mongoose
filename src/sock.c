@@ -304,6 +304,10 @@ static long recv_raw(struct mg_connection *c, void *buf, size_t len) {
   MG_VERBOSE(("%lu %ld %d", c->id, n, MG_SOCK_ERR(n)));
   if (MG_SOCK_PENDING(n)) return MG_IO_WAIT;
   if (MG_SOCK_RESET(n)) return MG_IO_RESET;  // MbedTLS, see #1507
+  // A zero-length datagram is a valid UDP read, not end-of-stream. Treating
+  // it as MG_IO_ERR made iolog() close the listener: one empty packet from
+  // anyone on the segment silently unbound a UDP server for good.
+  if (n == 0 && c->is_udp) return MG_IO_WAIT;
   if (n <= 0) return MG_IO_ERR;
   return n;
 }
