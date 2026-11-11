@@ -28,6 +28,15 @@
 #endif
 #endif
 
+// DTCM placement for hot-path data (STM32H7 zero-wait-state data RAM)
+#ifndef MG_DTCM
+#if defined(__ARM_ARCH_7EM__) || defined(__ARM_ARCH_7M__)
+#define MG_DTCM __attribute__((used, section(".dtcm")))
+#else
+#define MG_DTCM
+#endif
+#endif
+
 
 #ifdef MG_ENABLE_LINES
 #line 1 "src/base64.c"
