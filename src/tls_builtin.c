@@ -1057,6 +1057,34 @@ static bool mg_tls_rsa_sign(struct tls_data *tls, const uint8_t *em,
 #endif
 }
 
+// Encode one big-endian unsigned integer as a minimal DER INTEGER (tag, length,
+// content) at `out`, returning the number of bytes written.
+//
+// DER requires the minimal form: leading 0x00 bytes must be stripped, and a
+// 0x00 must be prepended only when the top bit of the leading byte is set
+// (otherwise the value would read as negative). The previous inline encoder
+// here handled the pad but never the strip, so it emitted `02 20 00 xx..`
+// whenever an ECDSA r or s happened to start with a zero byte -- a non-minimal
+// INTEGER. Strict parsers reject exactly that pattern (OpenSSL's c2i_ibuf()
+// raises ILLEGAL_PADDING), and because it surfaces through EVP_DigestVerify as
+// a plain verify failure, the client reports it as "bad signature". With
+// P-256, r or s starts with 0x00 about 1 time in 256, so roughly 1 handshake
+// in 256 failed for clients that enforce DER.
+static size_t mg_der_encode_uint(uint8_t *out, const uint8_t *val, size_t len) {
+  size_t i = 0, n, k = 0;
+  while (i + 1 < len && val[i] == 0) i++;  // strip leading zeros, keep >= 1 byte
+  n = len - i;
+  out[k++] = 0x02;  // ASN.1 INTEGER
+  if (val[i] & 0x80) {
+    out[k++] = (uint8_t) (n + 1);
+    out[k++] = 0x00;  // pad so the value is not read as negative
+  } else {
+    out[k++] = (uint8_t) n;
+  }
+  memmove(out + k, val + i, n);
+  return k + n;
+}
+
 static size_t mg_rsa_trim_len(const uint8_t **p, size_t n) {
   while (n > 0 && **p == 0) (*p)++, n--;
   return n;
@@ -1126,24 +1154,20 @@ static bool mg_tls_send_cert_verify(struct mg_connection *c, bool is_client) {
     struct SHA256_HashContext ctx = {
         {&init_SHA256, &update_SHA256, &finish_SHA256, 64, 32, tmp},
         {{0}, 0, 0, {0}}};
-    size_t sigsz, verifysz = 0;
-    int neg1, neg2;
+    size_t sigsz, verifysz = 0, bodysz = 0;
     uint8_t sig[64] = {0};
+    uint8_t body[72];  // two DER INTEGERs, at most (3 + 32) bytes each
     mg_uecc_sign_deterministic(tls->ec_key, hash, sizeof(hash), &ctx.uECC, sig,
                                mg_uecc_secp256r1());
 
-    neg1 = !!(sig[0] & 0x80);
-    neg2 = !!(sig[32] & 0x80);
+    // ECDSA-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }, minimal DER.
+    bodysz += mg_der_encode_uint(body + bodysz, sig, 32);       // r
+    bodysz += mg_der_encode_uint(body + bodysz, sig + 32, 32);  // s
     verify[8] = 0x30;  // ASN.1 SEQUENCE
-    verify[9] = (uint8_t) (68 + neg1 + neg2);
-    verify[10] = 0x02;  // ASN.1 INTEGER
-    verify[11] = (uint8_t) (32 + neg1);
-    memmove(verify + 12 + neg1, sig, 32);
-    verify[12 + 32 + neg1] = 0x02;  // ASN.1 INTEGER
-    verify[13 + 32 + neg1] = (uint8_t) (32 + neg2);
-    memmove(verify + 14 + 32 + neg1 + neg2, sig + 32, 32);
+    verify[9] = (uint8_t) bodysz;
+    memmove(verify + 10, body, bodysz);
 
-    sigsz = (size_t) (70 + neg1 + neg2);
+    sigsz = 2U + bodysz;
     verifysz = 8U + sigsz;
     verify[3] = (uint8_t) (sigsz + 4);
     verify[7] = (uint8_t) sigsz;
