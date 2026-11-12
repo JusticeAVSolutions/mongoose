@@ -9745,10 +9745,17 @@ MG_ITCM static void read_conn(struct mg_connection *c, struct pkt *pkt) {
       }
       s->twclosure = true;
     } else {
-      // Peer closed first: send ACK only, enter CLOSE_WAIT.
-      // The connection loop will call init_closure after pending send data
-      // is flushed, then send our FIN.
+      // Peer closed first: enter CLOSE_WAIT. With nothing left to send and
+      // no TLS, answer FIN+ACK in this same packet (7.21 behaviour) instead
+      // of leaving the FIN to the connection loop: on a server with a small
+      // fixed slot table, every poll period a closed connection lingers is
+      // a connect refused under burst reconnects. Otherwise the loop calls
+      // init_closure once pending send data is flushed.
       c->is_draining = 1;
+      if (c->send.len == 0 && !c->is_tls) {
+        flags |= TH_FIN;
+        settmout(c, MIP_TTYPE_FIN);
+      }
     }
     tx_tcp(c->mgr->ifp, s->mac, &c->loc, &c->rem, c->dscp, flags,
            mg_htonl(s->seq), mg_htonl(s->ack), "", 0);
